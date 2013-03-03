@@ -1,0 +1,131 @@
+<chapter id="needle-terracotta">
+	<title>Terracotta</title>
+	
+	<sect1 id="needle-terracotta-introduction">
+	    <title>Overview</title>
+	    
+	    <para>
+	        The Compass Needle <ulink url="http://www.terracotta.org">Terracotta</ulink> integration allows to store a Lucene index in a distributed manner using Terracotta as well as provide seamless integration with Compass. 
+	    </para>
+	</sect1>
+	
+	<sect1 id="needle-terracotta-directory">
+	  <title>Lucene Directory</title>
+	  
+	  <para>
+	    Compass provides a Terracotta optimized directory (similar to Lucene RAM directory) called <classname>TerracottaDirectory</classname>. When using it with pure Lucene applications, the directory needs to be defined as a "root" Terracotta object and then used when constructing <literal>IndexWriter</literal> and <literal>IndexReader</literal>. See the Compass Store on how to use compass jar file as a Terracotta Integration Module (TIM).
+	  </para>
+	  
+	  <para>
+	    Terracotta is a shared memory (referred to as "network attached memory"). The terracotta directory makes use of that and stores the directory in memory allowing for terracotta to distribute changes of it to all relevant nodes connected to the terracotta server. The actual content of a "file" in the directory is broken down into one or more byte arrays, which can be controlled using the bufferSize parameter. Note, once an index is created with a certain bufferSize, it should not be changed. By default, the buffer size is set to <literal>4096</literal> bytes.
+	  </para>
+	  
+	  <para>
+	    Terracotta will automatically fetch required content from the server, and will evict content if memory thresholds break for an application. When constructing large files, the directory allows to set a flush rate when the file content will be flushed (and be allowed to be evicted) during its creation. The formula is that every <literal>bufferSize * flushRate</literal> bytes, it will be released by Compass and allow terracotta to move it to the server and reclaim the memory. The default flush rate is set to 10.
+	  </para>  
+	  
+	  <para>
+	    The internal Concurrent Hash Map construction settings can also be controlled. Initial capacity (default to 16 * 10), load factor (default to 0.75), and concurrency level (defaults to 16 * 10).
+	  </para>
+
+    <para>
+        Note, it is preferable to configure the directory not to use the compound index format as it yields better performance (note, by default, when using Compass, the non compound format will be used). Also, the merge factor for the directory (also applies to Compass optimizers) should be set to a higher value (than the default 10) since it mainly applies to file based optimizations.
+    </para>
+    
+    <para>
+        A specialized version of <literal>TerracottaDirectory</literal> called <literal>CSMTerracottaDirectory</literal> is provided. The CSM version uses Terracotta specialized <literal>ConcurrentStringMap</literal> from the tim collections module instead of the <literal>ConcurrentHashMap</literal> the <literal>TerracottaDirectory</literal> uses.
+    </para>
+    
+    <para>
+        Another version of Lucene Terracotta Directory, called <classname>ManagedTerracottaDirectory</classname> is also provided. The idea behind this directory implementation is to be able to wrap several operations in a single "transaction". The <classname>ManagedTerracottaDirectory</classname> is initialized with a <classname>ReadWriteLock</classname> and any operations using Lucene should be wrapped with a read lock and unlock operations. The more operations are wrapped, the better the performance will be, since locking will be more coarse grained (as opposed to the more fine grained, concurrent hash map based, locking done with the plain <classname>TerracottaDirectory</classname>).
+    </para>
+	  
+	</sect1>
+	
+	<sect1 id="needle-terracotta-store">
+	  <title>Compass Store</title>
+	  
+	  <para>
+	    When using Compass, it is very simple to configure Compass to store the index using Terracotta. Compass jar file already comes in the format of a Terracotta Integration Module (TIM) allowing to simply drop it into <literal>TC_HOME/modules</literal> and it already comes pre-configured with a terracotta configuration of both locks and roots (<literal>terracotta.xml</literal> file within the root of the compass jar file). Another option is to tell Terracotta where to look for more TIMs within the application <literal>tc-config</literal> file and point it to where the compass jar is located.
+	  </para>
+	  
+	  <para>
+	    Once the TIM is setup, Compass has a special Terracotta connection that allows it to use the <literal>TerracottaDirectory</literal>, <literal>CSMTerracotaDirectory</literal>, or <literal>ManagedTerracottaDirectory</literal> called <literal>TerracottaDirectoryStore</literal>. The <literal>TerracottaDirectoryStore</literal> is where terracotta is configured to have its root (note, this is all defined for you already since compass is a TIM).
+	  </para>
+	  
+	  <para>
+	      The type of the terracotta directory used can be controlled using <literal>compass.compass.engine.store.tc.type</literal> setting. The setting can have three values: <literal>managed</literal> (the default), <literal>chm</literal> and <literal>csm</literal>. The <literal>managed</literal> terracotta directory, creates a logical transaction (using the managed read lock) that is bounded to the Compass transaction. It allows for much faster operations compared with the plain terracotta directory on expense of lower concurrency. The <literal>chm</literal> maps to the plain <literal>TerracottaDirectory</literal> and the <literal>csm</literal> maps to the <literal>CSMTerracottaDirectory</literal>.
+	  </para>
+	  
+	  <para>
+	    Here is a properties/settings based configuration
+<programlisting><![CDATA[compass.engine.connection=tc://myindex
+# default values, just showing how it can be configured
+compass.engine.store.tc.bufferSize=4096  
+compass.engine.store.tc.flushRate=10
+]]></programlisting>
+	  </para>
+	  
+	  <para>
+	    And here is an xml based configuration:
+<programlisting><![CDATA[<compass name="default">
+  <connection>
+      <tc indexName="myindex" bufferSize="4096" flushRate="10" />
+  </connection>
+</compass>
+]]></programlisting>
+	  </para>
+	  
+	  <para>
+	    The "client application" will need to run using Terracotta bootclasspath configuration, and have the following in its <literal>tc-config.xml</literal>: 
+<programlisting><![CDATA[
+  <clients>
+      <modules>
+          <module group-id="org.compass-project" name="compass" version="2.2.0" />
+      </modules>
+  </clients>
+]]></programlisting>
+      For more information on how to run it in different ways/environments, please refer to the terracotta documentation.
+	  </para>
+	</sect1>  
+	
+	<sect1 id="needle-terracotta-transaction-processor">
+	    <title>Transaction Processor</title>
+	  
+	    <para>
+	        Compass comes with a built in Terracotta transaction processor allowing to easily get master worker like processing of Compass transactions. Transactional dirty operations (create/delete/update) are accumulated during a transaction, and on commit time, they are put on a queue (one per sub index) that is shared by terracotta between different JVM instances. Transactioal processor workers can be started to process the transactional jobs and apply the changes to a shared index (obviously, can be stored using Terracotta as well). This allows for Compass transactions to be extremely fast, and having the heavy job of processing and indexing data performed on different nodes (or same nodes, but simply sharing the load).
+	    </para>
+	    
+	    <para>
+	        In order to enable the Terracotta transaction processor, a setting with the key of <literal>compass.transaction.processor.tc.type</literal> should be set to <literal>org.compass.needle.terracotta.transaction.processor.TerracottaTransactionProcessorFactory</literal>. Now, the default transaction processor used can be set to <literal>tc</literal> (for example, by setting: <literal>compass.transaction.processor</literal>). Of course, this setting can be set in runtime on a per session basis.
+	    </para>
+	    
+	    <para>
+	        When setting the above setting, transactions will be processed by the terracotta processor which means that nothing much will be done except for accumulating transactional changes and putting them as on a shared queue. By default, a thread per sub index will also be started to process transactional jobs for each sub index. The threads will pick transaction jobs and index them in a fail-safe, ordered transactional manner.
+	    </para>
+	    
+	    <para>
+	        Total ordering of transactions is maintained by default. This basically means that a dirty operation on a specific sub index will try and obtain a lock (using Lucene Directory abstraction) called "order.lock" (per sub index). The lock will be obtained through the duration of the transaction and released when the transaction commits / rolls back. Ordering of transactions on a sub index level can be disabled by setting <literal>compass.transaction.processor.tc.maintainOrder</literal> setting to <literal>false</literal>. This means that transactions on the same sub index will not block on each other, but ordering will not be guaranteed.
+	    </para>
+	    
+	    <para>
+	        In order to disable the actual processing/indexing of transactions by a specific node, the <literal>compass.transaction.processor.tc.process</literal> setting can be set to <literal>false</literal>. This option allows to create pure "client" nodes that simply put jobs on the queue (process flag set to false), and dedicated worker nodes that will process transactions off the queue (process flag set to true).
+	    </para>
+	    
+	    <para>
+	        By default, an indexing node will try and work on all sub indexes (note, it is perfectly fine to have more than one indexing node working on all sub indexes, they will maintain order and pick jobs as they can). In order to have a node to only process transactional jobs for certain sub indexes, the following setting <literal>compass.transaction.processor.tc.subIndexes</literal> should be set to a comma separated list of the sub indexes to process. The <literal>compass.transaction.processor.tc.aliases</literal> can also be used to narrow down the sub indexes of respective aliases that will be processed. This setting is very handy in cases where the index is stored on terracotta as well, the index is very large, and maximum collocation of sub index data and processing is desired.
+	    </para>
+	    
+	    <para>
+	        The processor thread itself (each per sub index), once it identifies that there is a transaction job to be processed, will try and get more transactional jobs (in a non blocking manner) for better utilization of an already opened <literal>IndexWriter</literal>. By default, it will try to process up to 5 more transactional jobs, and can be configured using <literal>compass.transaction.processor.tc.nonBlockingBatchJobSize</literal> setting.
+	    </para>
+	    
+	    <para>
+	        When a transaction commits by one of the client nodes, it will not be immediately visible for search operations. It will be visible only after the actual node that will process the transaction has done so, and the cache invalidation interval has kicked in to identify that the shared index has changed and the new index needs to be reloaded (happens in the background when using Compass). The cache invalidation interval (how often Compass will check if the index has changed) can be set using the following setting: <literal>compass.engine.cacheIntervalInvalidation</literal>.
+	    </para>
+
+        <para>
+ 		    <literal>CompassSession</literal> and <literal>CompassIndexSession</literal> provides the <literal>flushCommit</literal> operation. The operation, when used with the <literal>tc</literal> transaction processor, means that all the changes accumulated up to this point will be passed to be processed (similar to commit) except that the session is still open for additional changes. This allows, for long running indexing sessions, to periodically flush and commit the changes (otherwise memory consumption will continue to grow) instead of committing and closing the current session, and opening a new session. 
+ 		</para>
+	</sect1>
+</chapter>
